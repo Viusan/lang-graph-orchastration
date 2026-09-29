@@ -54,8 +54,6 @@ def data_agent(state: ResearchState) -> dict:
     #we return the stuff we want to update in our state
     return {"given_data": text_data, "decision_log": updated_log}
 
-
-
 def run_sandbox(code: str) -> dict: #utility function
     buffer = io.StringIO() #empty fake in-memory
     try:
