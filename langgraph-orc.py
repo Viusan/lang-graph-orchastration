@@ -1,5 +1,7 @@
 import os
 import sqlite3
+import io
+import contextlib
 
 from dotenv import load_dotenv
 from openai import OpenAI
@@ -21,6 +23,7 @@ client = OpenAI(
 #this is NOT an agent (this is our state), it's a data container (or shared memory) that gets passed around the agents.
 class ResearchState(TypedDict):
     given_data: str
+    calculated_data: dict
     interpretation: str
     reviewer_feedback: str
     reviewer_verdict: bool
@@ -51,12 +54,77 @@ def data_agent(state: ResearchState) -> dict:
     #we return the stuff we want to update in our state
     return {"given_data": text_data, "decision_log": updated_log}
 
+
+
+def run_sandbox(code: str) -> dict: #utility function
+    buffer = io.StringIO() #empty fake in-memory
+    try:
+        with contextlib.redirect_stdout(buffer): #whatever is printed inside here goes into the memory
+            exec(code)
+            captured_text = buffer.getvalue()   #pulls everything from buffer to string
+            return {"success": True, "stdout": captured_text, "error": None}
+    except Exception as e:
+        return {"success": False, "stdout": buffer.getvalue(), "error": str(e)}
+
+def modelling_agent(state: ResearchState) -> dict:
+    conn = sqlite3.connect("diabetes.db")
+
+    query = """
+    SELECT PhysActivity, Diabetes_binary, COUNT(*) as antall
+    FROM diabetes_binary
+    GROUP BY PhysActivity, Diabetes_binary
+    """
+    results = conn.execute(query).fetchall()
+    conn.close()
+
+    count_00 = None #no phys and no diabetes
+    count_01 = None #no phys but diabetes
+    count_10 = None #phys but no diabetes
+    count_11 = None #both phys and diabetes
+
+    for row in results: #asign count to who has what
+        phys_activity = row[0]
+        diabetes = row[1]
+        count = row[2]
+
+        if phys_activity == 0.0 and diabetes == 0.0:
+            count_00 = count
+        elif phys_activity == 0.0 and diabetes == 1.0:
+            count_01 = count
+        elif phys_activity == 1.0 and diabetes == 0.0:
+            count_10 = count
+        elif phys_activity == 1.0 and diabetes == 1.0:
+            count_11 = count
+
+    code = f"""
+from scipy.stats import chi2_contingency
+table = [[{count_00}, {count_01}], [{count_10}, {count_11}]]
+chi2, p_value, dof, expected = chi2_contingency(table)
+print(chi2, p_value)
+"""
+    sandbox_result = run_sandbox(code)
+
+    if sandbox_result["success"]:
+        chi2_value, p_value = sandbox_result["stdout"].split()
+        calculated = {"chi2": float(chi2_value), "p_value": float(p_value)}
+    else:
+        calculated = {"error": sandbox_result["error"]}
+
+    new_log_entry =  {"agent": "modelling_agent", "action": "sending data and code to run in sandbox"}
+    updated_log = state["decision_log"] + [new_log_entry]
+
+    return {"calculated_data": calculated, "decision_log": updated_log}
+
 #new node/agent
 def interpretation_agent(state: ResearchState) -> dict:
-    data_summary = state["given_data"]   #read what data_agent wrote, and what is in state
-    prompt = f"""Here is data from a health survey. PhysActivity is 1 if the person is physically active, 0 if not. Diabetes_binary is 1 if the person has diabetes, 0 if not.
-    {data_summary}
-    Based on these figures, what can we say about the relationship between physical activity and diabetes? Answer briefly, in a maximum of 3 sentences."""
+    calculated= state["calculated_data"]   #read what modelling_agent produced, and what is in state
+    
+    prompt = f"""Here is a statistical result from a health survey. A chi-square test of independence was run to check whether physical activity (PhysActivity) is related to diabetes (Diabetes_binary) in this data.
+
+Chi-square statistic: {calculated['chi2']}
+P-value: {calculated['p_value']}
+
+Based on this result, what can we say about the relationship between physical activity and diabetes? Keep in mind this dataset has a very large sample size, so even a small, practically unimportant difference can produce a statistically significant p-value — be careful not to overstate the finding. Answer briefly, in a maximum of 3 sentences."""
 
     response = client.chat.completions.create(
     model=model_name,
@@ -112,12 +180,14 @@ builder = StateGraph(ResearchState) #we tie it to our state schema
 
 #register the nodes with name asigned
 builder.add_node("data_agent", data_agent)
+builder.add_node("modelling_agent", modelling_agent)
 builder.add_node("interpretation_agent", interpretation_agent)
 builder.add_node("reviewer_agent", reviewer_agent)
 
 #wire the steps
 builder.add_edge(START, "data_agent")          
-builder.add_edge("data_agent", "interpretation_agent")     
+builder.add_edge("data_agent", "modelling_agent")  
+builder.add_edge("modelling_agent", "interpretation_agent")       
 builder.add_edge("interpretation_agent", "reviewer_agent")
 
 #this conditional node is so that if we get false from reviewer, we can loop back until its satisfied
@@ -137,6 +207,7 @@ graph = builder.compile()
 
 result = graph.invoke({
     "given_data": "",
+    "calculated_data": {},
     "interpretation": "",
     "reviewer_feedback": "",
     "reviewer_verdict": False,
@@ -147,3 +218,4 @@ result = graph.invoke({
 print(result["interpretation"])
 print(result["given_data"])
 print(result["decision_log"])
+print(result["calculated_data"])
