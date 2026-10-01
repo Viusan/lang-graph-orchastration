@@ -23,6 +23,7 @@ client = OpenAI(
 #this is NOT an agent (this is our state), it's a data container (or shared memory) that gets passed around the agents.
 class ResearchState(TypedDict):
     given_data: str
+    method_choice: str
     calculated_data: dict
     interpretation: str
     reviewer_feedback: str
@@ -54,6 +55,41 @@ def data_agent(state: ResearchState) -> dict:
     #we return the stuff we want to update in our state
     return {"given_data": text_data, "decision_log": updated_log}
 
+def methods_agent(state: ResearchState) -> dict:
+    data = state["given_data"]
+
+    prompt = f"""You are a biostatistics assistant helping choose an appropriate statistical test.
+
+Here is aggregated survey data showing the number of respondents (Antall) for each
+combination of two binary variables:
+
+- PhysActivity: whether the respondent reported physical activity in the past 30 days
+  (0 = no, 1 = yes)
+- Diabetes_binary: whether the respondent has diabetes or prediabetes
+  (0 = no, 1 = yes)
+
+here is the data that you are given {data}
+
+Based on this data, decide which statistical method is most appropriate to test whether
+there is a significant association between PhysActivity and Diabetes_binary. Briefly
+explain your reasoning (e.g. variable types, sample size, what the test assumes), then
+end your answer with exactly one line in this format:
+
+METHOD: <name of the test>
+"""
+    response = client.chat.completions.create(
+    model=model_name,
+    messages=[{"role": "user", "content": prompt}],
+    max_tokens=1500,
+    )
+
+    response_text = response.choices[0].message.content
+
+    new_log_entry = {"agent": "mothods_agent", "action": "agent decided what method is best to use for calculating the statistics"}
+    updated_log = state["decision_log"] + [new_log_entry]
+
+    return {"method_choice": response_text, "decision_log": updated_log}
+
 def run_sandbox(code: str) -> dict: #utility function
     buffer = io.StringIO() #empty fake in-memory
     try:
@@ -65,46 +101,46 @@ def run_sandbox(code: str) -> dict: #utility function
         return {"success": False, "stdout": buffer.getvalue(), "error": str(e)}
 
 def modelling_agent(state: ResearchState) -> dict:
-    conn = sqlite3.connect("diabetes.db")
+    use_method = state["method_choice"]
+    given_data = state["given_data"]
+    prompt = f"""
+    You are a Python data analyst. Write Python code that performs the following statistical
+test on the data given below. Do not explain anything — output ONLY valid Python code,
+with no markdown formatting, no triple backticks, and no comments outside the code.
 
-    query = """
-    SELECT PhysActivity, Diabetes_binary, COUNT(*) as antall
-    FROM diabetes_binary
-    GROUP BY PhysActivity, Diabetes_binary
-    """
-    results = conn.execute(query).fetchall()
-    conn.close()
+Method to use: {use_method}
 
-    count_00 = None #no phys and no diabetes
-    count_01 = None #no phys but diabetes
-    count_10 = None #phys but no diabetes
-    count_11 = None #both phys and diabetes
+The given data is: {given_data}
 
-    for row in results: #asign count to who has what
-        phys_activity = row[0]
-        diabetes = row[1]
-        count = row[2]
-
-        if phys_activity == 0.0 and diabetes == 0.0:
-            count_00 = count
-        elif phys_activity == 0.0 and diabetes == 1.0:
-            count_01 = count
-        elif phys_activity == 1.0 and diabetes == 0.0:
-            count_10 = count
-        elif phys_activity == 1.0 and diabetes == 1.0:
-            count_11 = count
-
-    code = f"""
-from scipy.stats import chi2_contingency
-table = [[{count_00}, {count_01}], [{count_10}, {count_11}]]
-chi2, p_value, dof, expected = chi2_contingency(table)
-print(chi2, p_value)
+Requirements:
+- Use only these libraries: scipy.stats, numpy. Do not import anything else, and do not
+  attempt any file access, network access, or database connection — work only with the
+  numbers given above.
+- Build the data directly from the literal values shown (e.g. as a list or array), not by
+  reading any external source.
+- Run the test named above and print the result in exactly this format, with no other
+  output:
+  RESULT: statistic=<value>, p_value=<value>
+- The code must run standalone from top to bottom with no undefined variables.
 """
-    sandbox_result = run_sandbox(code)
+
+    response = client.chat.completions.create(
+    model=model_name,
+    messages=[{"role": "user", "content": prompt}],
+    max_tokens=1500,
+    )
+
+    response_text = response.choices[0].message.content
+    print(response_text)
+    sandbox_result = run_sandbox(response_text)
 
     if sandbox_result["success"]:
-        chi2_value, p_value = sandbox_result["stdout"].split()
-        calculated = {"chi2": float(chi2_value), "p_value": float(p_value)}
+        text = sandbox_result["stdout"]
+        parts = text.split(",")
+        chi2_value = parts[0].split("=")
+        p_value = parts[1].split("=")
+
+        calculated = {"chi2": float(chi2_value[1]), "p_value": float(p_value[1])}
     else:
         calculated = {"error": sandbox_result["error"]}
 
@@ -178,13 +214,15 @@ builder = StateGraph(ResearchState) #we tie it to our state schema
 
 #register the nodes with name asigned
 builder.add_node("data_agent", data_agent)
+builder.add_node("methods_agent", methods_agent)
 builder.add_node("modelling_agent", modelling_agent)
 builder.add_node("interpretation_agent", interpretation_agent)
 builder.add_node("reviewer_agent", reviewer_agent)
 
 #wire the steps
 builder.add_edge(START, "data_agent")          
-builder.add_edge("data_agent", "modelling_agent")  
+builder.add_edge("data_agent", "methods_agent")  
+builder.add_edge("methods_agent", "modelling_agent")
 builder.add_edge("modelling_agent", "interpretation_agent")       
 builder.add_edge("interpretation_agent", "reviewer_agent")
 
@@ -205,6 +243,7 @@ graph = builder.compile()
 
 result = graph.invoke({
     "given_data": "",
+    "method_choice": "",
     "calculated_data": {},
     "interpretation": "",
     "reviewer_feedback": "",
@@ -213,7 +252,10 @@ result = graph.invoke({
     "decision_log": [],
 })
 
+print(" --------------- THESE ARE PRINTED VALUES TO CHECK STATE --------------- ")
+
 print(result["interpretation"])
+print(result["method_choice"])
 print(result["given_data"])
 print(result["decision_log"])
 print(result["calculated_data"])
