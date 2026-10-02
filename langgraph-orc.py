@@ -87,7 +87,7 @@ METHOD: <name of the test>
 
     response_text = response.choices[0].message.content
 
-    new_log_entry = {"agent": "mothods_agent", "action": "agent decided what method is best to use for calculating the statistics"}
+    new_log_entry = {"agent": "methods_agent", "action": "agent decided what method is best to use for calculating the statistics"}
     updated_log = state["decision_log"] + [new_log_entry]
 
     return {"method_choice": response_text, "decision_log": updated_log}
@@ -106,7 +106,7 @@ def modelling_agent(state: ResearchState) -> dict:
     use_method = state["method_choice"]
     given_data = state["given_data"]
     if "error" in state["calculated_data"]:
-        error_note = f"\nYour previous attempt failed with this error: {state['calculated_data']['error']}\nFix the code so this doesn't happen again.\nThe generated code that previously did not work was: {state["generated_code"]}\nUsing this information generate new code that works."
+        error_note = f"\nYour previous attempt failed with this error: {state['calculated_data']['error']}\nFix the code so this doesn't happen again.\nThe generated code that previously did not work was: {state['generated_code']}\nUsing this information generate new code that works."
     else:
         error_note = ""
 
@@ -152,7 +152,7 @@ Requirements:
     else:
         calculated = {"error": sandbox_result["error"]}
 
-    new_log_entry =  {"agent": "modelling_agent", "action": "sending data and code to run in sandbox"}
+    new_log_entry =  {"agent": "modelling_agent", "action": f"outcome that modelling agent came with: {calculated}"}
     updated_log = state["decision_log"] + [new_log_entry]
 
     return {"calculated_data": calculated, "decision_log": updated_log, "modelling_counter": state["modelling_counter"]+1, "generated_code": response_text}
@@ -160,22 +160,26 @@ Requirements:
 def route_after_modelling(state: ResearchState) -> str:
     calculated_data = state["calculated_data"]
 
-    if "error" in calculated_data:
+    if "error" not in calculated_data:
+        return "approved"
+    elif state["modelling_counter"] < 3:
         return "needs_revision"
     else:
-        return "approved"
+        return "failed"
 
 #new node/agent
 def interpretation_agent(state: ResearchState) -> dict:
     calculated= state["calculated_data"]   #read what modelling_agent produced, and what is in state
     
-    prompt = f"""Here is a statistical result from a health survey. A chi-square test of independence was run to check whether physical activity (PhysActivity) is related to diabetes (Diabetes_binary) in this data.
+    prompt = f"""Here is a statistical result from a health survey. The following method was used to test whether physical activity (PhysActivity) is related to diabetes (Diabetes_binary) in this data:
 
-Chi-square statistic: {calculated['chi2']}
+{state['method_choice']}
+
+Result:
+Statistic: {calculated['chi2']}
 P-value: {calculated['p_value']}
 
 Based on this result, what can we say about the relationship between physical activity and diabetes? Keep in mind this dataset has a very large sample size, so even a small, practically unimportant difference can produce a statistically significant p-value — be careful not to overstate the finding. Answer briefly, in a maximum of 3 sentences."""
-
     response = client.chat.completions.create(
     model=model_name,
     messages=[{"role": "user", "content": prompt}],
@@ -244,7 +248,8 @@ builder.add_conditional_edges(
     "modelling_agent", route_after_modelling,
     {
         "approved": "interpretation_agent",
-        "needs_revision": "modelling_agent"
+        "needs_revision": "modelling_agent",
+        "failed": END
     }
 )
  
@@ -263,11 +268,12 @@ builder.add_conditional_edges(
 #compile to something runnable
 graph = builder.compile()
 
-#graph.get_graph().draw_mermaid_png(output_file_path="graph.png") #create a graph to vizualise how the nodes interact with each other
+graph.get_graph().draw_mermaid_png(output_file_path="graph.png") #create a graph to vizualise how the nodes interact with each other
 
 result = graph.invoke({
     "given_data": "",
     "method_choice": "",
+    "generated_code": "",
     "calculated_data": {},
     "interpretation": "",
     "reviewer_feedback": "",
