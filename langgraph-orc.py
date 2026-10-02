@@ -139,7 +139,6 @@ Requirements:
     )
 
     response_text = response.choices[0].message.content
-    print(response_text)
     sandbox_result = run_sandbox(response_text)
 
     if sandbox_result["success"]:
