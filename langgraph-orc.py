@@ -24,11 +24,13 @@ client = OpenAI(
 class ResearchState(TypedDict):
     given_data: str
     method_choice: str
+    generated_code: str
     calculated_data: dict
     interpretation: str
     reviewer_feedback: str
     reviewer_verdict: bool
     revision_counter: int
+    modelling_counter: int
     decision_log: list[dict]
 
 #every LangGraph node is just a function with this shape
@@ -103,6 +105,11 @@ def run_sandbox(code: str) -> dict: #utility function
 def modelling_agent(state: ResearchState) -> dict:
     use_method = state["method_choice"]
     given_data = state["given_data"]
+    if "error" in state["calculated_data"]:
+        error_note = f"\nYour previous attempt failed with this error: {state['calculated_data']['error']}\nFix the code so this doesn't happen again.\nThe generated code that previously did not work was: {state["generated_code"]}\nUsing this information generate new code that works."
+    else:
+        error_note = ""
+
     prompt = f"""
     You are a Python data analyst. Write Python code that performs the following statistical
 test on the data given below. Do not explain anything — output ONLY valid Python code,
@@ -122,6 +129,7 @@ Requirements:
   output:
   RESULT: statistic=<value>, p_value=<value>
 - The code must run standalone from top to bottom with no undefined variables.
+{error_note}
 """
 
     response = client.chat.completions.create(
@@ -147,7 +155,15 @@ Requirements:
     new_log_entry =  {"agent": "modelling_agent", "action": "sending data and code to run in sandbox"}
     updated_log = state["decision_log"] + [new_log_entry]
 
-    return {"calculated_data": calculated, "decision_log": updated_log}
+    return {"calculated_data": calculated, "decision_log": updated_log, "modelling_counter": state["modelling_counter"]+1, "generated_code": response_text}
+
+def route_after_modelling(state: ResearchState) -> str:
+    calculated_data = state["calculated_data"]
+
+    if "error" in calculated_data:
+        return "needs_revision"
+    else:
+        return "approved"
 
 #new node/agent
 def interpretation_agent(state: ResearchState) -> dict:
@@ -223,7 +239,15 @@ builder.add_node("reviewer_agent", reviewer_agent)
 builder.add_edge(START, "data_agent")          
 builder.add_edge("data_agent", "methods_agent")  
 builder.add_edge("methods_agent", "modelling_agent")
-builder.add_edge("modelling_agent", "interpretation_agent")       
+
+builder.add_conditional_edges(
+    "modelling_agent", route_after_modelling,
+    {
+        "approved": "interpretation_agent",
+        "needs_revision": "modelling_agent"
+    }
+)
+ 
 builder.add_edge("interpretation_agent", "reviewer_agent")
 
 #this conditional node is so that if we get false from reviewer, we can loop back until its satisfied
@@ -249,6 +273,7 @@ result = graph.invoke({
     "reviewer_feedback": "",
     "reviewer_verdict": False,
     "revision_counter": 0,
+    "modelling_counter": 0,
     "decision_log": [],
 })
 
