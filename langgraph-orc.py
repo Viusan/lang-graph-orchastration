@@ -51,7 +51,7 @@ def data_agent(state: ResearchState) -> dict:
         text_data += f"{row[0]}, {row[1]}, {row[2]}\n"
 
     #we create a log so we know what has happened, and append it to decision log in our typeddict
-    new_log_entry = {"agent": "data_agent", "action": "generated data from diabetes.db"}
+    new_log_entry = {"agent": "data_agent", "action": f"generated data from diabetes.db, the data that was generated: {text_data}"}
     updated_log = state["decision_log"] + [new_log_entry] #we add list + list, or error. Also in LangGraph creating a new list instead of mutating old is better.
 
     #we return the stuff we want to update in our state
@@ -87,7 +87,7 @@ METHOD: <name of the test>
 
     response_text = response.choices[0].message.content
 
-    new_log_entry = {"agent": "methods_agent", "action": "agent decided what method is best to use for calculating the statistics"}
+    new_log_entry = {"agent": "methods_agent", "action": f"agent decided what method is best to use for calculating the statistics, and the decision it made: {response_text}"}
     updated_log = state["decision_log"] + [new_log_entry]
 
     return {"method_choice": response_text, "decision_log": updated_log}
@@ -151,7 +151,7 @@ Requirements:
     else:
         calculated = {"error": sandbox_result["error"]}
 
-    new_log_entry =  {"agent": "modelling_agent", "action": f"outcome that modelling agent came with: {calculated}"}
+    new_log_entry =  {"agent": "modelling_agent", "action": f"Created python code to run, it came up with: {response_text}. Outcome of the python code: {calculated}"}
     updated_log = state["decision_log"] + [new_log_entry]
 
     return {"calculated_data": calculated, "decision_log": updated_log, "modelling_counter": state["modelling_counter"]+1, "generated_code": response_text}
@@ -188,7 +188,7 @@ Based on this result, what can we say about the relationship between physical ac
     response_text = response.choices[0].message.content
 
     #update state
-    new_log_entry = {"agent": "interpretation_agent", "action": "interpreting the data that was given from data_agent"}
+    new_log_entry = {"agent": "interpretation_agent", "action": f"interpreting the data that was given from data_agent, response was: {response_text}"}
     updated_log = state["decision_log"] + [new_log_entry]
 
     return {"interpretation": response_text, "decision_log": updated_log}
@@ -214,7 +214,7 @@ def reviewer_agent(state: ResearchState) -> dict:
     else:
         reviewer_verdict = False
 
-    new_log_entry = {"agent": "reviewer_agent", "action": f"deciding if the interpretation was valid or not, this time the verdict was {reviewer_verdict}"}
+    new_log_entry = {"agent": "reviewer_agent", "action": f"Deciding if the interpretation was valid or not, this time the verdict was {reviewer_verdict}."}
     updated_log = state["decision_log"] + [new_log_entry]
 
     return {"reviewer_feedback": response_text, "reviewer_verdict": reviewer_verdict, "revision_counter": state["revision_counter"]+1, "decision_log": updated_log}
@@ -282,10 +282,8 @@ result = graph.invoke({
     "decision_log": [],
 })
 
-print(" --------------- THESE ARE PRINTED VALUES TO CHECK STATE --------------- ")
-
-print(result["interpretation"])
-print(result["method_choice"])
-print(result["given_data"])
-print(result["decision_log"])
-print(result["calculated_data"])
+#print("Interpretation: ", result["interpretation"])
+#print("Method choice: ", result["method_choice"])
+#print("Given data: ", result["given_data"])
+print("Decision log: ", result["decision_log"])
+#print("Calculated data: ", result["calculated_data"])
