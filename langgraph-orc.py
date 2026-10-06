@@ -170,6 +170,11 @@ def route_after_modelling(state: ResearchState) -> str:
 def interpretation_agent(state: ResearchState) -> dict:
     calculated= state["calculated_data"]   #read what modelling_agent produced, and what is in state
     
+    if "VERDICT: REVISE" in state["reviewer_feedback"]:
+        error_note = f"\nYour previous interpretation was not approved by verdict agent, and reason was {state['reviewer_feedback']}\nInterpret the info again."
+    else:
+        error_note = ""
+
     prompt = f"""Here is a statistical result from a health survey. The following method was used to test whether physical activity (PhysActivity) is related to diabetes (Diabetes_binary) in this data:
 
 {state['method_choice']}
@@ -178,7 +183,9 @@ Result:
 Statistic: {calculated['chi2']}
 P-value: {calculated['p_value']}
 
-Based on this result, what can we say about the relationship between physical activity and diabetes? Keep in mind this dataset has a very large sample size, so even a small, practically unimportant difference can produce a statistically significant p-value — be careful not to overstate the finding. Answer briefly, in a maximum of 3 sentences."""
+Based on this result, what can we say about the relationship between physical activity and diabetes? Keep in mind this dataset has a very large sample size, so even a small, practically unimportant difference can produce a statistically significant p-value — be careful not to overstate the finding. Answer briefly, in a maximum of 3 sentences.
+{error_note}
+"""
     response = client.chat.completions.create(
     model=model_name,
     messages=[{"role": "user", "content": prompt}],
@@ -196,11 +203,24 @@ Based on this result, what can we say about the relationship between physical ac
 def reviewer_agent(state: ResearchState) -> dict:
     interpreted_text = state["interpretation"]
 
-    prompt = f"""You are an interpretor agent, you have to review the text that is given to you and come to a conlusion wether the results are reasonable or not.
-    Once you are done interpreting the text, end the response with one line and nothing else after is:
-    Either "VERDICT: APPROVED" if you agree with the interpretaiob or "VERDICT: REVISE" if you disagree.
-    The interpreted text you are going to review is {interpreted_text}
-    """
+    prompt = f"""You are reviewing a written interpretation of a statistical result, to check whether it is accurate, not to re-run or re-judge the statistics yourself.
+
+Here is the data and method that were used to produce the interpretation:
+Calculated result: {state['calculated_data']}
+Method used: {state['method_choice']}
+
+Here is the interpretation text that was written based on that result:
+{interpreted_text}
+
+Assume the data and method themselves are already correct, that is not what you are checking. Your only job is to decide whether the interpretation text above accurately and faithfully reflects the given data and method. Reject it (REVISE) if the text:
+- misrepresents or contradicts the actual numbers or method
+- ignores the data entirely and doesn't meaningfully engage with it
+- draws a conclusion the data doesn't support
+- is vague, off-topic, or unrelated to the actual statistical result
+
+Explain your reasoning for why the interpretation does or does not match the data, then end your response with exactly one line and nothing else after it:
+Either "VERDICT: APPROVED" if the interpretation accurately reflects the data, or "VERDICT: REVISE" if it does not.
+"""
     response = client.chat.completions.create(
     model=model_name,
     messages=[{"role": "user", "content": prompt}],
@@ -214,7 +234,14 @@ def reviewer_agent(state: ResearchState) -> dict:
     else:
         reviewer_verdict = False
 
-    new_log_entry = {"agent": "reviewer_agent", "action": f"Deciding if the interpretation was valid or not, this time the verdict was {reviewer_verdict}."}
+    revision_counter = state["revision_counter"]
+
+    if not reviewer_verdict and revision_counter+1 == 3:
+        failed_log = "revision counter hit its limit, despite having a false verdict we will still proceed."
+    else:
+        failed_log =""
+
+    new_log_entry = {"agent": "reviewer_agent", "action": f"Deciding if the interpretation was valid or not, this time the verdict was {reviewer_verdict} and reasoning was: {response_text}. {failed_log}"}
     updated_log = state["decision_log"] + [new_log_entry]
 
     return {"reviewer_feedback": response_text, "reviewer_verdict": reviewer_verdict, "revision_counter": state["revision_counter"]+1, "decision_log": updated_log}
