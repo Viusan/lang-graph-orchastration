@@ -2,6 +2,7 @@ import os
 import sqlite3
 import io
 import contextlib
+import json
 
 from dotenv import load_dotenv
 from openai import OpenAI
@@ -215,9 +216,14 @@ Assume the data and method themselves are already correct, that is not what you 
 - draws a conclusion the data doesn't support
 - is vague, off-topic, or unrelated to the actual statistical result
 
-Explain your reasoning for why the interpretation does or does not match the data, then end your response with exactly one line and nothing else after it:
-Either "VERDICT: APPROVED" if the interpretation accurately reflects the data, or "VERDICT: REVISE" if it does not.
+Respond with ONLY a single JSON object and nothing else, no markdown code fences, no text before or after it. The object must have exactly these two keys:
+- "verdict": a boolean. true if the interpretation accurately reflects the data, false if it does not.
+- "reason": a string explaining why you reached that verdict, referencing the specific data/method. This part is needed every single time, do not put a empty reason, but explain why you decided what do you did.
+
+Example of the exact shape required (do not copy the content it only serves as an example, copy only the structure):
+{{"verdict": false, "reason": "The interpretation claims a significant effect, but the p-value of 0.42 does not support that."}}
 """
+
     response = client.chat.completions.create(
     model=model_name,
     messages=[{"role": "user", "content": prompt}],
@@ -225,8 +231,9 @@ Either "VERDICT: APPROVED" if the interpretation accurately reflects the data, o
     )
 
     response_text = response.choices[0].message.content
+    json_reformat = json.loads(response_text)
 
-    if "VERDICT: APPROVED" in response_text.upper():
+    if json_reformat["verdict"]:
         reviewer_verdict = True
     else:
         reviewer_verdict = False
