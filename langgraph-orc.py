@@ -245,7 +245,7 @@ Example of the exact shape required (do not copy the content it only serves as a
     else:
         failed_log =""
 
-    new_log_entry = {"agent": "reviewer_agent", "action": f"Deciding if the interpretation was valid or not, this time the verdict was {reviewer_verdict} and reasoning was: {response_text}. {failed_log}"}
+    new_log_entry = {"agent": "reviewer_agent", "action": f"Deciding if the interpretation was valid or not, this time the verdict was {reviewer_verdict} and reasoning was: {json_reformat["reason"]}. {failed_log}"}
     updated_log = state["decision_log"] + [new_log_entry]
 
     return {"reviewer_feedback": response_text, "reviewer_verdict": reviewer_verdict, "revision_counter": state["revision_counter"]+1, "decision_log": updated_log}
