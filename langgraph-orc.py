@@ -20,7 +20,7 @@ client = OpenAI(
     default_headers={"x-api-key": api_key},
 )
 
-#this is NOT an agent (this is our state), it's a data container (or shared memory) that gets passed around the agents.
+#this is stategraph, it's a data container (or shared memory) that gets passed around the agents.
 class ResearchState(TypedDict):
     given_data: str
     method_choice: str
@@ -33,7 +33,6 @@ class ResearchState(TypedDict):
     modelling_counter: int
     decision_log: list[dict]
 
-#every LangGraph node is just a function with this shape
 def data_agent(state: ResearchState) -> dict:
     conn = sqlite3.connect("diabetes.db")
 
@@ -166,7 +165,6 @@ def route_after_modelling(state: ResearchState) -> str:
     else:
         return "failed"
 
-#new node/agent
 def interpretation_agent(state: ResearchState) -> dict:
     calculated= state["calculated_data"]   #read what modelling_agent produced, and what is in state
     
@@ -194,7 +192,6 @@ Based on this result, what can we say about the relationship between physical ac
     
     response_text = response.choices[0].message.content
 
-    #update state
     new_log_entry = {"agent": "interpretation_agent", "action": f"interpreting the data that was given from data_agent, response was: {response_text}"}
     updated_log = state["decision_log"] + [new_log_entry]
 
